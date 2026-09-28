@@ -1,62 +1,62 @@
 # ESP32 Matter WS2812B Controller
 
-This project provides production-ready firmware for ESP32 chips to control a WS2812B LED Matrix (e.g., 8x8 WS2812B-64) over the Matter protocol, exposing it as an Extended Color Light device perfectly integrated into Apple HomeKit and smart home ecosystems.
+An open-source firmware project for people who want to build and flash a Matter-controlled WS2812B light at home. The goal is reliable DIY use, not a commercial product or certification program.
 
-## Core Features
+## What it does today
 
-- **Matter Protocol Support**: Full-featured Matter Extended Color Light, correctly syncing states locally and externally.
-- **HomeKit Optimization**: Seamless color, saturation, brightness, and color temperature (Mireds) control directly from the Apple Home app, including White-Balance calibrations tailored for generic GRB/RGB WS2812B nodes.
-- **Asynchronous RTOS Renderer Pipeline**: Thread-safe architecture decoupling Matter protocol operations from physical RMT interactions. Updates are coalesced inside a FreeRTOS `Queue` targeting `50ms` debouncing latency to eliminate HomeKit control flickering or Matter stack blocking out.
-- **State Persistence**: Attributes (Hue, X, Y, Mireds, Brightness) are stored directly inside the `NVS` partition upon modification and correctly snap-restored prior to Matter initializing up to prevent "offline" or "mismatched" status feedback upon boot. 
-- **Hardware Protection Pipeline**: 
-  - **High-Fidelity Dynamic Power Model**: Our renderer implements a physics-based power model for WS2812B. It accounts for the static quiescent current of the ICs (~1mA/LED) and calculates precise per-channel draw (R/G/B). If the limit is reached, it dynamically scales variable LED intensity while preserving the baseline logic power, ensuring maximum brightness for single-color modes while protecting your PSU during full-white modes.
-  - Explicit GPIO UART Multiplex-Overriding, shielding your matrix from receiving junk data during standard framework boot sequences.
+- Exposes one Matter Extended Color Light endpoint.
+- Accepts on/off, brightness, hue/saturation, XY color, and color-temperature updates.
+- Renders one solid color across the configured strip; individual pixels and matrix effects are not implemented.
+- Saves the last light state in NVS and attempts to restore it at startup.
+- Estimates LED current in software and scales output to a configured budget. This is an estimate, not a current sensor or electrical protection circuit.
 
-## Architecture
+The firmware and hardware are not validated across every ESP32 board or WS2812B revision. The repository includes default sdkconfig profiles for ESP32-C3 and ESP32-S3; pin choices, RMT support, flash size, and power wiring still need to match your board. Expect to inspect logs and adjust configuration for your hardware.
 
-The previous monolithic implementation has been restructured into standard modules under `/main`:
-- `/state` -> Thread-safe `LedState` abstraction and mutexes.
-- `/renderer` -> Asynchronous `renderer_task` evaluating physics, debouncing, and drawing `final_r`, `final_g`, `final_b` targets.
-- `/matter` -> Abstraction isolating only Matter initialization and protocol mappings. 
-- `/storage` -> Non-Volatile Storage (NVS) implementations.
-- `/led_driver` -> Low-level ESP-IDF `led_strip` and `rmt` interface logic.
+## Hardware
 
-## Hardware Setup
+- An ESP32 board supported by your installed ESP-IDF and ESP-Matter versions.
+- A WS2812B-compatible strip or matrix connected to the configured data GPIO.
+- A suitably rated external 5 V supply for the LEDs. Do not draw the strip's load current through the ESP32 development board.
+- A common ground between the ESP32 and LED supply. For a 5 V strip, use a logic-level shifter when the board's 3.3 V data signal is not accepted reliably.
+- Appropriate wiring, connectors, and overcurrent protection for the selected LED count and supply.
 
-1. **ESP32 Target**: Standard ESP32, ESP32-C3, or similar.
-2. **WS2812B Matrix**: Connect the data line of the WS2812B matrix. Be sure to use a 5V level-shifter if driving heavy distances. Be highly mindful of power constraints!
+The default GPIO and current budget are examples, not recommendations for every board or strip. Check the board pinout before connecting the data line. The software current estimate cannot protect against an undersized supply, wiring fault, or failed firmware.
 
-### Configuration
-You no longer need to edit source C++ code to target your hardware. Run:
+## Build and flash
+
+Install a compatible ESP-IDF and ESP-Matter environment using the projects' setup instructions. Export the environment so `IDF_PATH`, `ESP_MATTER_PATH`, and the required ESP-Matter device path are available to CMake.
+
+The current ESP32-C3 build was verified with ESP-IDF v5.5.3 and ESP-Matter revision `94d54bc`.
+
+Select your target and configure the project:
+
 ```bash
+idf.py set-target esp32c3
 idf.py menuconfig
 ```
-Navigate to **WS2812B Configuration** to tweak:
-- `LED Strip GPIO Pin` (Default: `8`)
-- `Maximum number of LEDs` (Default: `64`)
-- `Maximum Current Limit (mA)` (Default: `1500`)
-- `Global Brightness Cap` (Default: `255`)
 
-## Prerequisites
+In **WS2812B Configuration**, set the data GPIO, LED count, current budget, and brightness cap for your hardware. Confirm the target-specific pin and flash configuration before building.
 
-- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html) -> Environment exported. 
-- [ESP-Matter SDK](https://github.com/espressif/esp-matter) -> Environment exported.
+```bash
+idf.py build
+idf.py flash monitor
+```
 
-## Build and Flash
+If Ninja reports that `build.ninja` cannot load `CMakeFiles/rules.ninja`, regenerate the build files with `idf.py reconfigure`, then run `idf.py build`. When changing chips, run `idf.py set-target <target>` before building so ESP-IDF and ESP-Matter use the same target.
 
-1. Configure your target environment (e.g. ESP32-C3):
-   ```bash
-   idf.py set-target esp32c3
-   ```
-2. Set your custom pins/power inside CMake's `menuconfig`
-3. Hit Build, Flash, & Monitor:
-   ```bash
-   idf.py build flash monitor
-   ```
+This project does not use Matter OTA updates. Firmware updates are performed locally over the ESP32's supported flashing interface. Keep a copy of the matching ESP-IDF and ESP-Matter versions used to build your firmware.
 
-## Commissioning
+## Matter commissioning
 
-Open your Matter controller app (Apple Home, Google Home) and add a new accessory. The pairing code and QR code URL will be printed extensively in the serial terminal output upon your first boot.
+On first boot, follow the commissioning information printed by the firmware monitor and add the light from your Matter controller. The current defaults are development/test settings; they are suitable for local experimentation, not for reusing as shared credentials across a group of devices. Factory reset and recovery behavior should be checked on your board before relying on it.
 
-## Licensing
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## Limitations
+
+- One endpoint and a uniform strip color are implemented; scenes, gradients, per-pixel addressing, and effects remain future work.
+- Color output depends on the LED revision and hardware; software values are not a calibrated colorimeter.
+- No over-the-air update path is planned.
+- Builds and source review do not prove radio range, electrical safety, power-limit accuracy, or reliability on a particular assembled device.
+
+## License
+
+MIT; see [LICENSE](LICENSE).

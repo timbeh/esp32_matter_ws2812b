@@ -1,5 +1,6 @@
 dependencies:
-  espressif/led_strip: "*"
+  # Keep the LED driver API stable across fresh component-manager resolutions.
+  espressif/led_strip: "1.0.0"
   espressif/cmake_utilities:
     version: ^1
     rules: # will add "optional_component" only when all if clauses are True

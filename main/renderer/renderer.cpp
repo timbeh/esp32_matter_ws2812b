@@ -34,17 +34,31 @@ static void hsv_to_rgb(uint8_t h, uint8_t s, uint8_t *r, uint8_t *g, uint8_t *b)
 }
 
 static void xy_to_rgb(uint16_t x, uint16_t y, uint8_t *r, uint8_t *g, uint8_t *b) {
-    float x_f = (float)x / 65535.0f;
-    float y_f = (float)y / 65535.0f;
-    float z_f = 1.0f - x_f - y_f;
+    const float chroma_x = (float)x / 65535.0f;
+    const float chroma_y = (float)y / 65535.0f;
+    if (chroma_y <= 0.0f || chroma_x + chroma_y > 1.0f) {
+        *r = 0;
+        *g = 0;
+        *b = 0;
+        return;
+    }
 
-    float r_f = x_f * 3.2406f - y_f * 1.5372f - z_f * 0.4986f;
-    float g_f = -x_f * 0.9689f + y_f * 1.8758f + z_f * 0.0415f;
-    float b_f = x_f * 0.0557f - y_f * 0.2040f + z_f * 1.0570f;
+    // Convert CIE xy chromaticity to XYZ at a fixed Y, then to linear sRGB.
+    const float X = chroma_x / chroma_y;
+    const float Y = 1.0f;
+    const float Z = (1.0f - chroma_x - chroma_y) / chroma_y;
+    const float linear_r = X * 3.2406f - Y * 1.5372f - Z * 0.4986f;
+    const float linear_g = -X * 0.9689f + Y * 1.8758f + Z * 0.0415f;
+    const float linear_b = X * 0.0557f - Y * 0.2040f + Z * 1.0570f;
 
-    *r = (uint8_t)(fmaxf(0, fminf(1.0f, r_f)) * 255.0f);
-    *g = (uint8_t)(fmaxf(0, fminf(1.0f, g_f)) * 255.0f);
-    *b = (uint8_t)(fmaxf(0, fminf(1.0f, b_f)) * 255.0f);
+    // The renderer applies its 2.2 gamma correction after each color mode.
+    // Encode here so that the later correction yields these linear intensities.
+    const float encoded_r = powf(fmaxf(0.0f, fminf(1.0f, linear_r)), 1.0f / 2.2f);
+    const float encoded_g = powf(fmaxf(0.0f, fminf(1.0f, linear_g)), 1.0f / 2.2f);
+    const float encoded_b = powf(fmaxf(0.0f, fminf(1.0f, linear_b)), 1.0f / 2.2f);
+    *r = (uint8_t)(encoded_r * 255.0f);
+    *g = (uint8_t)(encoded_g * 255.0f);
+    *b = (uint8_t)(encoded_b * 255.0f);
 }
 
 static void ct_to_rgb(uint16_t mireds, uint8_t *r, uint8_t *g, uint8_t *b) {
@@ -151,7 +165,12 @@ static void renderer_task(void *arg) {
                 if (available_for_leds < 0) available_for_leds = 0;
 
                 float requested_for_leds = r_draw_ma + g_draw_ma + b_draw_ma;
-                float scaling_factor = available_for_leds / requested_for_leds;
+                float scaling_factor = 0.0f;
+                if (quiescent_ma < CONFIG_LED_STRIP_MAX_CURRENT_MA && requested_for_leds > 0.0f) {
+                    scaling_factor = fminf(1.0f, available_for_leds / requested_for_leds);
+                } else if (quiescent_ma >= CONFIG_LED_STRIP_MAX_CURRENT_MA) {
+                    ESP_LOGE(TAG, "Configured current budget is at or below the estimated LED idle current");
+                }
 
                 r_f *= scaling_factor;
                 g_f *= scaling_factor;

@@ -9,18 +9,21 @@ menu "WS2812B Configuration"
     config LED_STRIP_MAX_LEDS
         int "Maximum number of LEDs"
         default 64
+        range 1 512
         help
             Number of LEDs in the strip.
 
     config LED_STRIP_MAX_CURRENT_MA
         int "Maximum Current Limit (mA)"
         default 1500
+        range 1 100000
         help
-            Maximum overall current for the LED strip.
+            Software-estimated maximum overall current budget for the LED strip.
 
     config LED_STRIP_GLOBAL_BRIGHTNESS_CAP
         int "Global Brightness Cap (0-255)"
         default 255
+        range 0 255
         help
             Maximum allowable brightness value.
 
