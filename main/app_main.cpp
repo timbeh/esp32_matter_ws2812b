@@ -1,6 +1,7 @@
 #include <esp_log.h>
 #include <esp_matter.h>
 #include <esp_matter_console.h>
+#include <esp_wifi.h>
 #include "state/state.h"
 #include "storage/storage.h"
 #include "renderer/renderer.h"
@@ -16,6 +17,19 @@ static void app_event_cb(const chip::DeviceLayer::ChipDeviceEvent *event, intptr
     switch (event->Type) {
     case chip::DeviceLayer::DeviceEventType::kCommissioningComplete:
         ESP_LOGI(TAG, "Commissioning complete");
+        break;
+    case chip::DeviceLayer::DeviceEventType::kWiFiConnectivityChange:
+        if (event->WiFiConnectivityChange.Result == chip::DeviceLayer::kConnectivity_Established) {
+            wifi_ap_record_t ap_info = {};
+            esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "Wi-Fi connected: RSSI=%d dBm, channel=%u", ap_info.rssi, ap_info.primary);
+            } else {
+                ESP_LOGW(TAG, "Wi-Fi connected; AP diagnostics unavailable: %s", esp_err_to_name(err));
+            }
+        } else if (event->WiFiConnectivityChange.Result == chip::DeviceLayer::kConnectivity_Lost) {
+            ESP_LOGW(TAG, "Wi-Fi connection lost");
+        }
         break;
     default:
         break;
