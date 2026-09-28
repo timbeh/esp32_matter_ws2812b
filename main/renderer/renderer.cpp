@@ -11,6 +11,7 @@
 static const char *TAG = "renderer";
 
 static QueueHandle_t renderer_queue;
+static TaskHandle_t renderer_task_handle;
 static LedState last_rendered_state;
 
 static void hsv_to_rgb(uint8_t h, uint8_t s, uint8_t *r, uint8_t *g, uint8_t *b) {
@@ -118,7 +119,10 @@ static void renderer_task(void *arg) {
 
             if (!target_state.on || target_state.brightness == 0) {
                 ESP_LOGI(TAG, "Rendering OUT: STRIP CLEAR");
-                led_driver_clear();
+                esp_err_t err = led_driver_clear();
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "LED clear failed: %s", esp_err_to_name(err));
+                }
                 continue;
             }
 
@@ -186,23 +190,49 @@ static void renderer_task(void *arg) {
             ESP_LOGI(TAG, "Rendering OUT: mode=%d fn_r=%d fn_g=%d fn_b=%d", target_state.color_mode, fn_r, fn_g, fn_b);
 
             uint32_t max_leds = CONFIG_LED_STRIP_MAX_LEDS;
+            esp_err_t err = ESP_OK;
             for (uint32_t i = 0; i < max_leds; i++) {
-                led_driver_set_pixel(i, fn_r, fn_g, fn_b);
+                err = led_driver_set_pixel(i, fn_r, fn_g, fn_b);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Setting LED %lu failed: %s", (unsigned long)i, esp_err_to_name(err));
+                    break;
+                }
             }
-            
-            led_driver_refresh();
+            if (err == ESP_OK) {
+                err = led_driver_refresh();
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "LED refresh failed: %s", esp_err_to_name(err));
+                }
+            }
         }
     }
 }
 
-void renderer_init() {
+esp_err_t renderer_init() {
+    if (renderer_queue || renderer_task_handle) {
+        return (renderer_queue && renderer_task_handle) ? ESP_OK : ESP_ERR_INVALID_STATE;
+    }
+
     renderer_queue = xQueueCreate(10, sizeof(LedState));
-    xTaskCreate(renderer_task, "renderer_task", 4096, NULL, 5, NULL);
+    if (!renderer_queue) {
+        ESP_LOGE(TAG, "Creating renderer queue failed");
+        return ESP_ERR_NO_MEM;
+    }
+
+    if (xTaskCreate(renderer_task, "renderer_task", 4096, NULL, 5, &renderer_task_handle) != pdPASS) {
+        ESP_LOGE(TAG, "Creating renderer task failed");
+        vQueueDelete(renderer_queue);
+        renderer_queue = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 void renderer_enqueue_update(const LedState& new_state) {
     if (renderer_queue) {
         // Non-blocking enqueue from callbacks
-        xQueueSendToBack(renderer_queue, &new_state, 0);
+        if (xQueueSendToBack(renderer_queue, &new_state, 0) != pdTRUE) {
+            ESP_LOGW(TAG, "Renderer queue is full; dropping a state update");
+        }
     }
 }

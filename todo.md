@@ -2,7 +2,7 @@
 
 ## Reliability and home flashing
 
-- [ ] Propagate LED, queue, task, and Matter initialization errors instead of silently continuing.
+- [x] Propagate LED, queue, task, and Matter initialization errors instead of silently continuing.
 - [ ] Validate restored NVS values and define explicit factory-reset and recovery behavior.
 - [ ] Batch rapid light-state persistence so slider updates do not commit every intermediate value.
 - [ ] Pin ESP-IDF, ESP-Matter, and component versions for repeatable builds.

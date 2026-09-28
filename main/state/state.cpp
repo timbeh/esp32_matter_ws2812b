@@ -20,35 +20,56 @@ static LedState current_state = {
 
 static SemaphoreHandle_t state_mutex = nullptr;
 
-static void ensure_mutex() {
+static bool ensure_mutex() {
     if (!state_mutex) {
         state_mutex = xSemaphoreCreateMutex();
     }
+    if (!state_mutex) {
+        ESP_LOGE(TAG, "Creating state mutex failed");
+        return false;
+    }
+    return true;
+}
+
+esp_err_t state_init() {
+    return ensure_mutex() ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 LedState state_get() {
-    ensure_mutex();
+    if (!ensure_mutex()) {
+        return current_state;
+    }
     LedState s;
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return current_state;
+    }
     s = current_state;
     xSemaphoreGive(state_mutex);
     return s;
 }
 
 void state_set(const LedState& new_state) {
-    ensure_mutex();
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (!ensure_mutex()) return;
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return;
+    }
     current_state = new_state;
+    LedState snapshot = current_state;
     xSemaphoreGive(state_mutex);
     
     // Store persistently config and enqueue rendering
-    storage_save_state(current_state);
-    renderer_enqueue_update(current_state);
+    storage_save_state(snapshot);
+    renderer_enqueue_update(snapshot);
 }
 
 void state_update_onoff(bool on) {
-    ensure_mutex();
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (!ensure_mutex()) return;
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return;
+    }
     bool changed = current_state.on != on;
     current_state.on = on;
     LedState s = current_state;
@@ -60,8 +81,11 @@ void state_update_onoff(bool on) {
 }
 
 void state_update_level(uint8_t level) {
-    ensure_mutex();
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (!ensure_mutex()) return;
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return;
+    }
     bool changed = current_state.brightness != level;
     current_state.brightness = level;
     LedState s = current_state;
@@ -73,8 +97,11 @@ void state_update_level(uint8_t level) {
 }
 
 void state_update_hue(uint8_t hue) {
-    ensure_mutex();
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (!ensure_mutex()) return;
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return;
+    }
     bool changed = (current_state.hue != hue) || (current_state.color_mode != 0);
     current_state.hue = hue;
     current_state.color_mode = 0;
@@ -87,8 +114,11 @@ void state_update_hue(uint8_t hue) {
 }
 
 void state_update_enhanced_hue(uint16_t hue) {
-    ensure_mutex();
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (!ensure_mutex()) return;
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return;
+    }
     uint8_t mapped_hue = (hue * 254) / 65535;
     bool changed = (current_state.hue != mapped_hue) || (current_state.color_mode != 0);
     current_state.hue = mapped_hue;
@@ -102,8 +132,11 @@ void state_update_enhanced_hue(uint16_t hue) {
 }
 
 void state_update_saturation(uint8_t sat) {
-    ensure_mutex();
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (!ensure_mutex()) return;
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return;
+    }
     bool changed = (current_state.saturation != sat) || (current_state.color_mode != 0);
     current_state.saturation = sat;
     current_state.color_mode = 0;
@@ -116,8 +149,11 @@ void state_update_saturation(uint8_t sat) {
 }
 
 void state_update_xy(uint16_t x, uint16_t y) {
-    ensure_mutex();
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (!ensure_mutex()) return;
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return;
+    }
     bool changed = (current_state.x != x || current_state.y != y) || (current_state.color_mode != 1);
     current_state.x = x;
     current_state.y = y;
@@ -131,8 +167,11 @@ void state_update_xy(uint16_t x, uint16_t y) {
 }
 
 void state_update_ct(uint16_t mireds) {
-    ensure_mutex();
-    xSemaphoreTake(state_mutex, portMAX_DELAY);
+    if (!ensure_mutex()) return;
+    if (xSemaphoreTake(state_mutex, portMAX_DELAY) != pdTRUE) {
+        ESP_LOGE(TAG, "Taking state mutex failed");
+        return;
+    }
     bool changed = (current_state.mireds != mireds) || (current_state.color_mode != 2);
     current_state.mireds = mireds;
     current_state.color_mode = 2;

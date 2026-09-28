@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <esp_err.h>
 
 struct LedState {
     bool on;
@@ -14,6 +15,7 @@ struct LedState {
     uint8_t color_mode; // 0: HSV, 1: XY, 2: CT
 };
 
+esp_err_t state_init();
 LedState state_get();
 void state_set(const LedState& new_state);
 void state_update_onoff(bool on);
