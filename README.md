@@ -46,9 +46,26 @@ If Ninja reports that `build.ninja` cannot load `CMakeFiles/rules.ninja`, regene
 
 This project does not use Matter OTA updates. Firmware updates are performed locally over the ESP32's supported flashing interface. Keep a copy of the matching ESP-IDF and ESP-Matter versions used to build your firmware.
 
-## Matter commissioning
+## Matter commissioning and recovery
 
-On first boot, follow the commissioning information printed by the firmware monitor and add the light from your Matter controller. The current defaults are development/test settings; they are suitable for local experimentation, not for reusing as shared credentials across a group of devices. Factory reset and recovery behavior should be checked on your board before relying on it.
+On first boot, follow the commissioning information printed by the firmware monitor and add the light from your Matter controller. The current defaults are development/test settings; they are suitable for local experimentation, not for reusing as shared credentials across a group of devices.
+
+The firmware does not assume a particular board button. To factory reset a running device, connect to its serial console after Matter starts and run:
+
+```text
+matter esp factoryreset
+```
+
+This erases the saved light settings and Matter pairing data, then restarts the device. Commission it again after the restart. If the firmware cannot boot far enough to accept the command, erase and reflash it locally:
+
+```bash
+idf.py -p PORT erase-flash
+idf.py -p PORT flash monitor
+```
+
+Replace `PORT` with the serial port for the board. A full flash erase clears all NVS data, including Matter pairing and saved light settings. With the repository's default configuration, ESP-Matter and the light state share the `nvs` partition; if NVS reports no free pages or an incompatible version at startup, the firmware automatically erases that partition and logs that recommissioning may be required. Individual saved values with an unsupported type or range fall back to safe defaults and are reported in the serial log. Light-state writes are coalesced in 500 ms batches; sudden power loss can lose the most recent changes made within that window.
+
+Brightness, color, and on/off changes are eased at the LED output over a few hundred milliseconds. Matter attributes continue to reflect the requested target immediately.
 
 ## Limitations
 

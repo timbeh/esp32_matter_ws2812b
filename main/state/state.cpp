@@ -9,7 +9,7 @@ static const char *TAG = "state";
 
 static LedState current_state = {
     .on = false,
-    .brightness = 254,
+    .brightness = led_state_limits::kMaxBrightness,
     .hue = 0,
     .saturation = 0,
     .x = 0,
@@ -119,7 +119,7 @@ void state_update_enhanced_hue(uint16_t hue) {
         ESP_LOGE(TAG, "Taking state mutex failed");
         return;
     }
-    uint8_t mapped_hue = (hue * 254) / 65535;
+    uint8_t mapped_hue = (hue * led_state_limits::kMaxHue) / 65535;
     bool changed = (current_state.hue != mapped_hue) || (current_state.color_mode != 0);
     current_state.hue = mapped_hue;
     current_state.color_mode = 0;

@@ -119,7 +119,7 @@ esp_err_t matter_driver_attribute_update(void *driver_handle, uint16_t endpoint_
 
 esp_err_t matter_driver_sync_attributes(uint16_t endpoint_id, const LedState& current_state)
 {
-    if (current_state.color_mode > 2) {
+    if (current_state.color_mode > led_state_limits::kMaxColorMode) {
         ESP_LOGE(TAG, "Stored color mode %u is unsupported", current_state.color_mode);
         return ESP_ERR_INVALID_ARG;
     }
@@ -164,10 +164,14 @@ esp_err_t matter_driver_init()
     }
 
     endpoint::extended_color_light::config_t light_config;
+    light_config.level_control_lighting.min_level = led_state_limits::kMinBrightness;
+    light_config.level_control_lighting.max_level = led_state_limits::kMaxBrightness;
     light_config.color_control.color_mode = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
     light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kCurrentHueAndCurrentSaturation;
-    light_config.color_control_color_temperature.color_temp_physical_min_mireds = 153;
-    light_config.color_control_color_temperature.color_temp_physical_max_mireds = 500;
+    light_config.color_control_color_temperature.color_temp_physical_min_mireds =
+        led_state_limits::kMinColorTemperatureMireds;
+    light_config.color_control_color_temperature.color_temp_physical_max_mireds =
+        led_state_limits::kMaxColorTemperatureMireds;
 
     endpoint_t *endpoint = endpoint::extended_color_light::create(node, &light_config, ENDPOINT_FLAG_NONE, nullptr);
     if (!endpoint) {

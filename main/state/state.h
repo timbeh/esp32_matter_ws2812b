@@ -4,6 +4,17 @@
 #include <stdbool.h>
 #include <esp_err.h>
 
+namespace led_state_limits {
+constexpr uint8_t kMinBrightness = 1;
+constexpr uint8_t kMaxBrightness = 254;
+constexpr uint8_t kMaxHue = 254;
+constexpr uint8_t kMaxSaturation = 254;
+constexpr uint16_t kMaxXyCoordinate = 65279;
+constexpr uint16_t kMinColorTemperatureMireds = 153;
+constexpr uint16_t kMaxColorTemperatureMireds = 500;
+constexpr uint8_t kMaxColorMode = 2;
+}
+
 struct LedState {
     bool on;
     uint8_t brightness;

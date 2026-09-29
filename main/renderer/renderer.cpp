@@ -9,10 +9,18 @@
 #include "sdkconfig.h"
 
 static const char *TAG = "renderer";
+static constexpr uint32_t RENDER_FRAME_INTERVAL_MS = 20;
+static constexpr float RENDER_SMOOTHING_TIME_CONSTANT_MS = 120.0f;
+static constexpr float RENDER_SETTLED_THRESHOLD = 0.5f;
+
+struct RgbFrame {
+    float red;
+    float green;
+    float blue;
+};
 
 static QueueHandle_t renderer_queue;
 static TaskHandle_t renderer_task_handle;
-static LedState last_rendered_state;
 
 static void hsv_to_rgb(uint8_t h, uint8_t s, uint8_t *r, uint8_t *g, uint8_t *b) {
     float h_f = (float)h * 360.0f / 254.0f;
@@ -97,114 +105,185 @@ static bool state_equals(const LedState& a, const LedState& b) {
            a.mireds == b.mireds && a.color_mode == b.color_mode;
 }
 
-static void renderer_task(void *arg) {
-    LedState target_state;
-    target_state = state_get();
-    last_rendered_state = target_state;
-    last_rendered_state.on = !target_state.on; // Force first render!
+static RgbFrame state_to_rgb(const LedState& target_state)
+{
+    if (!target_state.on || target_state.brightness == 0) {
+        return {0.0f, 0.0f, 0.0f};
+    }
 
-    while (1) {
-        if (xQueueReceive(renderer_queue, &target_state, portMAX_DELAY) == pdTRUE) {
-            
-            vTaskDelay(pdMS_TO_TICKS(50));
-            LedState latest_state;
-            while(xQueueReceive(renderer_queue, &latest_state, 0) == pdTRUE) {
-                target_state = latest_state;
-            }
+    uint8_t r = 0, g = 0, b = 0;
+    if (target_state.color_mode == 0) {
+        hsv_to_rgb(target_state.hue, target_state.saturation, &r, &g, &b);
+    } else if (target_state.color_mode == 1) {
+        xy_to_rgb(target_state.x, target_state.y, &r, &g, &b);
+    } else {
+        const uint16_t mireds = target_state.mireds == 0 ? 250 : target_state.mireds;
+        ct_to_rgb(mireds, &r, &g, &b);
+    }
 
-            if (state_equals(target_state, last_rendered_state)) {
-                continue;
-            }
-            last_rendered_state = target_state;
+    r = apply_gamma(r);
+    g = apply_gamma(g);
+    b = apply_gamma(b);
 
-            if (!target_state.on || target_state.brightness == 0) {
-                ESP_LOGI(TAG, "Rendering OUT: STRIP CLEAR");
-                esp_err_t err = led_driver_clear();
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "LED clear failed: %s", esp_err_to_name(err));
-                }
-                continue;
-            }
+    float brightness = (float)target_state.brightness / led_state_limits::kMaxBrightness;
+    brightness *= (float)CONFIG_LED_STRIP_GLOBAL_BRIGHTNESS_CAP / 255.0f;
 
-            uint8_t r = 0, g = 0, b = 0;
-            if (target_state.color_mode == 0) {
-                hsv_to_rgb(target_state.hue, target_state.saturation, &r, &g, &b);
-            } else if (target_state.color_mode == 1) {
-                xy_to_rgb(target_state.x, target_state.y, &r, &g, &b);
-            } else {
-                if (target_state.mireds == 0) target_state.mireds = 250;
-                ct_to_rgb(target_state.mireds, &r, &g, &b);
-            }
+    // Preserve the established channel balance while smoothing the final LED output.
+    float r_f = r * brightness;
+    float g_f = g * 0.75f * brightness;
+    float b_f = b * 0.50f * brightness;
 
-            r = apply_gamma(r);
-            g = apply_gamma(g);
-            b = apply_gamma(b);
-            
-            float brightness_f = ((float)target_state.brightness / 254.0f);
-            float max_cap_f = (float)CONFIG_LED_STRIP_GLOBAL_BRIGHTNESS_CAP / 255.0f;
-            brightness_f *= max_cap_f;
-            
-            float wb_r = 1.0f;
-            float wb_g = 0.75f;
-            float wb_b = 0.50f;
+    // Keep the current estimate and limiter applied to every transition endpoint.
+    const float quiescent_ma = (float)CONFIG_LED_STRIP_MAX_LEDS;
+    const float r_draw_ma = (r_f / 255.0f) * 20.0f * CONFIG_LED_STRIP_MAX_LEDS;
+    const float g_draw_ma = (g_f / 255.0f) * 20.0f * CONFIG_LED_STRIP_MAX_LEDS;
+    const float b_draw_ma = (b_f / 255.0f) * 20.0f * CONFIG_LED_STRIP_MAX_LEDS;
+    const float current_estimate_ma = quiescent_ma + r_draw_ma + g_draw_ma + b_draw_ma;
 
-            float r_f = r * wb_r * brightness_f;
-            float g_f = g * wb_g * brightness_f;
-            float b_f = b * wb_b * brightness_f;
+    if (current_estimate_ma > CONFIG_LED_STRIP_MAX_CURRENT_MA) {
+        float available_for_leds = (float)CONFIG_LED_STRIP_MAX_CURRENT_MA - quiescent_ma;
+        if (available_for_leds < 0.0f) available_for_leds = 0.0f;
 
-            // Dynamic Power Model (WS2812B specific):
-            // 1. Quiescent Current: Each WS2812B IC draws ~1mA just to power the internal logic.
-            // 2. Channel Current: Each color channel (R,G,B) draws ~20mA at full (255) intensity.
-            float quiescent_ma = (float)CONFIG_LED_STRIP_MAX_LEDS * 1.0f;
-            float r_draw_ma = (r_f / 255.0f) * 20.0f * CONFIG_LED_STRIP_MAX_LEDS;
-            float g_draw_ma = (g_f / 255.0f) * 20.0f * CONFIG_LED_STRIP_MAX_LEDS;
-            float b_draw_ma = (b_f / 255.0f) * 20.0f * CONFIG_LED_STRIP_MAX_LEDS;
-
-            float current_estimate_ma = quiescent_ma + r_draw_ma + g_draw_ma + b_draw_ma;
-            
-            if (current_estimate_ma > CONFIG_LED_STRIP_MAX_CURRENT_MA) {
-                // If we are over the limit, calculate how much headroom we have left 
-                // after the quiescent draw is subtracted.
-                float available_for_leds = (float)CONFIG_LED_STRIP_MAX_CURRENT_MA - quiescent_ma;
-                if (available_for_leds < 0) available_for_leds = 0;
-
-                float requested_for_leds = r_draw_ma + g_draw_ma + b_draw_ma;
-                float scaling_factor = 0.0f;
-                if (quiescent_ma < CONFIG_LED_STRIP_MAX_CURRENT_MA && requested_for_leds > 0.0f) {
-                    scaling_factor = fminf(1.0f, available_for_leds / requested_for_leds);
-                } else if (quiescent_ma >= CONFIG_LED_STRIP_MAX_CURRENT_MA) {
-                    ESP_LOGE(TAG, "Configured current budget is at or below the estimated LED idle current");
-                }
-
-                r_f *= scaling_factor;
-                g_f *= scaling_factor;
-                b_f *= scaling_factor;
-                ESP_LOGI(TAG, "Dynamic Limit: Scaling by %.2f to stay under %dmA (Estimate was %.0fmA)", 
-                         scaling_factor, CONFIG_LED_STRIP_MAX_CURRENT_MA, current_estimate_ma);
-            }
-
-            uint8_t fn_r = (uint8_t)fmaxf(0, fminf(255, r_f));
-            uint8_t fn_g = (uint8_t)fmaxf(0, fminf(255, g_f));
-            uint8_t fn_b = (uint8_t)fmaxf(0, fminf(255, b_f));
-
-            ESP_LOGI(TAG, "Rendering OUT: mode=%d fn_r=%d fn_g=%d fn_b=%d", target_state.color_mode, fn_r, fn_g, fn_b);
-
-            uint32_t max_leds = CONFIG_LED_STRIP_MAX_LEDS;
-            esp_err_t err = ESP_OK;
-            for (uint32_t i = 0; i < max_leds; i++) {
-                err = led_driver_set_pixel(i, fn_r, fn_g, fn_b);
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "Setting LED %lu failed: %s", (unsigned long)i, esp_err_to_name(err));
-                    break;
-                }
-            }
-            if (err == ESP_OK) {
-                err = led_driver_refresh();
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "LED refresh failed: %s", esp_err_to_name(err));
-                }
-            }
+        const float requested_for_leds = r_draw_ma + g_draw_ma + b_draw_ma;
+        float scaling_factor = 0.0f;
+        if (quiescent_ma < CONFIG_LED_STRIP_MAX_CURRENT_MA && requested_for_leds > 0.0f) {
+            scaling_factor = fminf(1.0f, available_for_leds / requested_for_leds);
+        } else if (quiescent_ma >= CONFIG_LED_STRIP_MAX_CURRENT_MA) {
+            ESP_LOGE(TAG, "Configured current budget is at or below the estimated LED idle current");
         }
+
+        r_f *= scaling_factor;
+        g_f *= scaling_factor;
+        b_f *= scaling_factor;
+        ESP_LOGD(TAG, "Dynamic limit: scale %.2f under %dmA (estimated %.0fmA)", scaling_factor,
+                 CONFIG_LED_STRIP_MAX_CURRENT_MA, current_estimate_ma);
+    }
+
+    return {
+        fminf(255.0f, fmaxf(0.0f, r_f)),
+        fminf(255.0f, fmaxf(0.0f, g_f)),
+        fminf(255.0f, fmaxf(0.0f, b_f)),
+    };
+}
+
+static bool frame_is_settled(const RgbFrame& current, const RgbFrame& target)
+{
+    return fabsf(target.red - current.red) <= RENDER_SETTLED_THRESHOLD &&
+           fabsf(target.green - current.green) <= RENDER_SETTLED_THRESHOLD &&
+           fabsf(target.blue - current.blue) <= RENDER_SETTLED_THRESHOLD;
+}
+
+static bool receive_latest_state(LedState *state, TickType_t timeout)
+{
+    if (xQueueReceive(renderer_queue, state, timeout) != pdTRUE) {
+        return false;
+    }
+
+    LedState latest_state;
+    while (xQueueReceive(renderer_queue, &latest_state, 0) == pdTRUE) {
+        *state = latest_state;
+    }
+    return true;
+}
+
+static uint8_t output_channel(float value)
+{
+    return (uint8_t)lroundf(fminf(255.0f, fmaxf(0.0f, value)));
+}
+
+static void render_frame(const RgbFrame& frame, uint8_t last_output[3], bool *has_rendered)
+{
+    const uint8_t output[3] = {
+        output_channel(frame.red),
+        output_channel(frame.green),
+        output_channel(frame.blue),
+    };
+    if (*has_rendered && output[0] == last_output[0] && output[1] == last_output[1] &&
+        output[2] == last_output[2]) {
+        return;
+    }
+
+    esp_err_t err = ESP_OK;
+    for (uint32_t i = 0; i < CONFIG_LED_STRIP_MAX_LEDS; ++i) {
+        err = led_driver_set_pixel(i, output[0], output[1], output[2]);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Setting LED %lu failed: %s", (unsigned long)i, esp_err_to_name(err));
+            return;
+        }
+    }
+
+    err = led_driver_refresh();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "LED refresh failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    memcpy(last_output, output, sizeof(output));
+    *has_rendered = true;
+}
+
+static void renderer_task(void *arg)
+{
+    (void)arg;
+
+    LedState target_state = state_get();
+    RgbFrame target_frame = state_to_rgb(target_state);
+    RgbFrame current_frame = {0.0f, 0.0f, 0.0f};
+    bool transitioning = !frame_is_settled(current_frame, target_frame);
+    uint8_t last_output[3] = {0, 0, 0};
+    bool has_rendered = false;
+
+    TickType_t frame_ticks = pdMS_TO_TICKS(RENDER_FRAME_INTERVAL_MS);
+    if (frame_ticks == 0) {
+        frame_ticks = 1;
+    }
+    TickType_t last_wake = xTaskGetTickCount();
+    TickType_t last_render_tick = last_wake;
+
+    while (true) {
+        if (!transitioning) {
+            LedState latest_state;
+            if (!receive_latest_state(&latest_state, portMAX_DELAY)) {
+                continue;
+            }
+            if (!state_equals(latest_state, target_state)) {
+                target_state = latest_state;
+                target_frame = state_to_rgb(target_state);
+            }
+            if (frame_is_settled(current_frame, target_frame)) {
+                current_frame = target_frame;
+                continue;
+            }
+
+            transitioning = true;
+            last_wake = xTaskGetTickCount();
+            last_render_tick = last_wake;
+        }
+
+        // Pace output frames while keeping only the newest requested Matter state.
+        vTaskDelayUntil(&last_wake, frame_ticks);
+
+        LedState latest_state;
+        if (receive_latest_state(&latest_state, 0) && !state_equals(latest_state, target_state)) {
+            target_state = latest_state;
+            target_frame = state_to_rgb(target_state);
+        }
+
+        const TickType_t now = xTaskGetTickCount();
+        const TickType_t elapsed_ticks = now - last_render_tick;
+        last_render_tick = now;
+        const float elapsed_ms = (float)elapsed_ticks * 1000.0f / configTICK_RATE_HZ;
+        const float blend = 1.0f - expf(-elapsed_ms / RENDER_SMOOTHING_TIME_CONSTANT_MS);
+
+        current_frame.red += (target_frame.red - current_frame.red) * blend;
+        current_frame.green += (target_frame.green - current_frame.green) * blend;
+        current_frame.blue += (target_frame.blue - current_frame.blue) * blend;
+
+        if (frame_is_settled(current_frame, target_frame)) {
+            current_frame = target_frame;
+            transitioning = false;
+        }
+        render_frame(current_frame, last_output, &has_rendered);
     }
 }
 
@@ -213,7 +292,7 @@ esp_err_t renderer_init() {
         return (renderer_queue && renderer_task_handle) ? ESP_OK : ESP_ERR_INVALID_STATE;
     }
 
-    renderer_queue = xQueueCreate(10, sizeof(LedState));
+    renderer_queue = xQueueCreate(1, sizeof(LedState));
     if (!renderer_queue) {
         ESP_LOGE(TAG, "Creating renderer queue failed");
         return ESP_ERR_NO_MEM;
@@ -230,9 +309,9 @@ esp_err_t renderer_init() {
 
 void renderer_enqueue_update(const LedState& new_state) {
     if (renderer_queue) {
-        // Non-blocking enqueue from callbacks
-        if (xQueueSendToBack(renderer_queue, &new_state, 0) != pdTRUE) {
-            ESP_LOGW(TAG, "Renderer queue is full; dropping a state update");
+        // Keep the latest target; intermediate slider values need not be rendered.
+        if (xQueueOverwrite(renderer_queue, &new_state) != pdPASS) {
+            ESP_LOGE(TAG, "Queueing renderer state failed");
         }
     }
 }
