@@ -5,7 +5,7 @@
 - [x] Propagate LED, queue, task, and Matter initialization errors instead of silently continuing.
 - [x] Validate restored NVS values and define explicit factory-reset and recovery behavior.
 - [x] Batch rapid light-state persistence so slider updates do not commit every intermediate value.
-- [ ] Pin ESP-IDF, ESP-Matter, and component versions for repeatable builds.
+- [x] Pin ESP-IDF, ESP-Matter, and component versions for repeatable builds.
 - [ ] Document tested board and LED combinations as they are verified.
 - [ ] Add repeatable host-side coverage for color conversion, configuration bounds, and state persistence.
 

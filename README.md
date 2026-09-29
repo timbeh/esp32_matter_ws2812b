@@ -24,9 +24,18 @@ The default GPIO and current budget are examples, not recommendations for every 
 
 ## Build and flash
 
-Install a compatible ESP-IDF and ESP-Matter environment using the projects' setup instructions. Export the environment so `IDF_PATH`, `ESP_MATTER_PATH`, and the required ESP-Matter device path are available to CMake.
+Use the pinned source revisions below for repeatable builds. The CMake configure step checks these revisions and stops with a clear error when an SDK checkout differs. After checking out ESP-Matter, initialize its submodules at the revisions recorded by that checkout.
 
-The current ESP32-C3 build was verified with ESP-IDF v5.5.3 and ESP-Matter revision `94d54bc`.
+| Build input | Pinned revision |
+| --- | --- |
+| ESP-IDF | v5.5.3, `2c211b236707889e8400c4dc5644dd5c4ee071e0` |
+| ESP-Matter | `94d54bc3353c1740a358dad1328ea4c20feebe5d` |
+| ConnectedHomeIP submodule | `8f943388af4d12dc5c484eae21b22723e03c3616` |
+| ESP Component Manager registry dependencies | Exact versions in the checked-in `dependencies.lock` |
+
+Direct dependencies are pinned in `main/idf_component.yml`. The Component Manager generates `dependencies.lock`; do not edit it by hand. The checked-in lock currently targets `esp32c3`; switching targets can trigger a target-specific lock regeneration. When intentionally changing a dependency or SDK pin, reconfigure and build with the matching target, review the generated lockfile, update the revision checks in `cmake/check-build-versions.cmake`, and verify the supported target profiles before committing the change.
+
+Install the ESP-IDF tools from the pinned ESP-IDF checkout and export both SDK environments so `IDF_PATH`, `ESP_MATTER_PATH`, and the required ESP-Matter device path are available to CMake.
 
 Select your target and configure the project:
 
